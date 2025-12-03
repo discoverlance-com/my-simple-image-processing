@@ -1,0 +1,46 @@
+# Python specific files and directories
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python/
+venv/
+.venv/
+env/
+.env/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.pytest_cache/
+htmlcov/
+.coverage
+.mypy_cache/
+.vscode/
+.idea/
+
+# Editor and OS specific files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Git related files
+.git/
+.gitignore
+
+# Build artifacts and temporary files
+dist/
+build/
+*.egg-info/
+*.log
+tmp/
+temp/
+
+# Configuration files that should not be copied
+# (e.g., local development settings, credentials)
+*.ini
+*.conf
+*.yaml
+*.yml
+*.toml
+.env

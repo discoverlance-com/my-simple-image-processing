@@ -20,10 +20,6 @@ Overview / design notes
   `gs://my-bucket/20251203T1530Z/file.jpg`.
 - The timestamp uses hour precision (format `YYYYMMDDTHHZ`) to group thumbnails into hour-level folders.
 
-![Screenshot of a chef handling multiple orders](./single-chef.png)
-
-![Screenshot of multiple chefs handling multiple orders](./multiple-chefs.png)
-
 Local testing with Docker
 1. Inspect the image entrypoint and files:
 ```bash

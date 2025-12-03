@@ -18,7 +18,11 @@ Overview / design notes
 - Chunking (partitioning) is computed from the total number of discovered images and split across `TASK_COUNT` and `TASK_INDEX`.
 - Output thumbnails are uploaded at the bucket root under a timestamp folder (minute precision), for example:
   `gs://my-bucket/20251203T1530Z/file.jpg`.
-- The timestamp uses minute precision (format `YYYYMMDDTHHMMZ`) to group thumbnails into minute-level folders.
+- The timestamp uses hour precision (format `YYYYMMDDTHHZ`) to group thumbnails into hour-level folders.
+
+![Screenshot of a chef handling multiple orders](./single-chef.png)
+
+![Screenshot of multiple chefs handling multiple orders](./multiple-chefs.png)
 
 Local testing with Docker
 1. Inspect the image entrypoint and files:

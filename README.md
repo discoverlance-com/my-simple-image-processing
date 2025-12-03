@@ -1,142 +1,130 @@
 # My Simple Image Processing
 
-A small GCS-only image processing utility that:
-- Lists image objects under a GCS prefix (provided via `INPUT_FOLDER`).
-- Splits work across tasks using `CLOUD_RUN_TASK_INDEX` / `CLOUD_RUN_TASK_COUNT`.
-- Creates 100×100 thumbnails (preserving aspect ratio) using Pillow.
-- Uploads thumbnails into a timestamped folder at the root of the same bucket:
-  `gs://<bucket>/<TIMESTAMP>/<original_filename>`.
+A small Python web + event service that does two related things:
 
-This repository contains:
-- `process.py` — the main script run inside the container.
-- `requirements.txt` — Python dependencies (`google-cloud-storage`, `Pillow`).
-- `Procfile` — present for buildpack compatibility (not required if you use a Dockerfile).
+1. Exposes a simple web homepage (`GET /`) with a file upload form. Uploaded images are validated server-side and uploaded to a configured Cloud Storage bucket in a timestamped folder.
+2. Exposes a CloudEvent receiver (`POST /event`) intended for Cloud Storage notifications. When a notification is received, the service downloads the object, creates a 100×100 thumbnail (preserving aspect ratio) and uploads the thumbnail into a timestamped folder in the same bucket.
 
-Overview / design notes
-- Input is strictly cloud storage. `INPUT_FOLDER` must be a `gs://` path (e.g. `gs://my-bucket/some/prefix`).
-- The script identifies images using blob `content-type` (if present) or common filename extensions.
-- Chunking (partitioning) is computed from the total number of discovered images and split across `TASK_COUNT` and `TASK_INDEX`.
-- Output thumbnails are uploaded at the bucket root under a timestamp folder (minute precision), for example:
-  `gs://my-bucket/20251203T1530Z/file.jpg`.
-- The timestamp uses hour precision (format `YYYYMMDDTHHZ`) to group thumbnails into hour-level folders.
+This repo contains:
+- `process.py` — image thumbnail creation and helper functions (Pillow + google-cloud-storage).
+- `main.py` — Flask web app: homepage + `/upload` + `/event` handler (idempotency, uploads).
+- `requirements.txt` — Python dependencies.
 
-Local testing with Docker
-1. Inspect the image entrypoint and files:
-```bash
-docker inspect --format '{{.Config.Entrypoint}} {{.Config.Cmd}}' IMAGE_URI
-```
+Design notes
+- Thumbnail creation is performed with Pillow. The thumbnail code attempts to preserve original format when possible, otherwise falls back to PNG.
+- Timestamped output uses UTC hour precision in the folder name: `YYYYMMDDT%HZ` (e.g. `20251203T15Z`).
+- The `/event` handler implements in-memory idempotency for Cloud Storage notifications using the key:
+  ```bash
+  <bucket>/<object_name>@<generation>
+  ```
+  The in-memory store prevents duplicate processing within the same process but is not shared between different instances or after a restart.
 
-List contents of the image:
-```bash
-docker run --rm --entrypoint ls IMAGE_URI -la /app
-```
+Important limitations
+- Idempotency is in-memory only: it works only for the lifetime of a single process. If your service scales to multiple instances (Cloud Run) or restarts, duplicate processing across instances is possible. For global idempotency use a shared datastore (Cloud Storage preconditions, Firestore, Redis, etc.).
+- The service stores uploaded file bytes in memory during processing. For large files or heavy concurrency, increase instance memory or stream to disk.
+- The homepage relies exclusively on the `UPLOAD_BUCKET` environment variable. No bucket name is accepted from the user form.
 
-2. Run the image using the image's default entrypoint (simple test):
-```bash
-docker run --rm \
-  -e INPUT_FOLDER=gs://my-bucket/path \
-  -e PYTHONUNBUFFERED=1 \
-  IMAGE_URI
-```
+Environment variables
+- `UPLOAD_BUCKET` (required for web upload): the bucket where form-uploaded files are stored. If not set the homepage will show an error and the upload form will not be rendered.
+- `FLASK_SECRET` (optional): secret key used for Flask's flash messages. Set to a secure value in production.
+- `PORT` (optional): port the Flask app listens on. Cloud Run sets this automatically; default is `8080`.
+- `GOOGLE_APPLICATION_CREDENTIALS` (optional for local testing): path in the container to a service account key file when testing locally. On Cloud Run, use the service account attached to the service.
+- For the old job-style processing in `process.py`, the script expects `INPUT_FOLDER` and optional `CLOUD_RUN_TASK_INDEX` / `CLOUD_RUN_TASK_COUNT` — this repo now also supports the web and CloudEvent mode via `main.py`.
 
-3. Force-run `process.py` regardless of image entrypoint (recommended for debug):
-```bash
-docker run --rm \
-  -e INPUT_FOLDER=gs://my-bucket/path \
-  -e PYTHONUNBUFFERED=1 \
-  --entrypoint python \
-  IMAGE_URI process.py
-```
+Endpoints
+- `GET /` — homepage with upload form (only displayed when `UPLOAD_BUCKET` is set).
+- `POST /upload` — form handler (multipart/form-data):
+  - Validates the uploaded file with Pillow.
+  - Sanitizes filename via `werkzeug.utils.secure_filename`.
+  - Uploads original bytes to: `gs://<UPLOAD_BUCKET>/<TIMESTAMP>/<filename>`.
+  - Flashes a success or error message and redirects to `/`.
+- `POST /event` — CloudEvent receiver (expects CloudEvents produced by Cloud Storage notifications). It:
+  - Extracts `bucket`, `name` or `file_name`, and `generation` from event data.
+  - Uses idempotency key `<bucket>/<object_name>@<generation>` to avoid duplicate processing within the same process.
+  - Downloads object, creates thumbnail (100×100), uploads thumbnail to `gs://<bucket>/<TIMESTAMP>/<basename>`.
+  - Returns JSON with status and uploaded path.
 
-4. Run with Google credentials (if you need GCS access from local):
-```bash
-docker run --rm \
-  -e INPUT_FOLDER=gs://my-bucket/path \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/secrets/key.json \
-  -e PYTHONUNBUFFERED=1 \
-  -v /path/on/host/key.json:/secrets/key.json:ro \
-  --entrypoint python \
-  IMAGE_URI process.py
-```
+Local development and testing
 
-Build and push container image (recommended: Docker + Artifact Registry)
-Example Dockerfile (create `Dockerfile` in repo root):
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . /app
-ENTRYPOINT ["python", "process.py"]
-```
+1. Install dependencies
+   - Create a virtualenv and install:
+     ```bash
+     pip install -r requirements.txt
+     ```
+   - Required packages include:
+     - `Flask`
+     - `google-cloud-storage`
+     - `Pillow`
+     - `cloudevents` (for parsing CloudEvent payloads)
 
-Build & push example:
-```bash
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-REGION=us-central1
-REPOSITORY=your-repo
-IMAGE=your-image
-TAG=latest
-IMAGE_URI=LOCATION-docker.pkg.dev/YOUR_PROJECT_ID/$REPOSITORY/$IMAGE:$TAG
+2. Run locally (no GCS access)
+   - To exercise the homepage and upload behavior (without GCS access), set `UPLOAD_BUCKET` to a test bucket name and mock the upload function or run with valid credentials (see below).
+   - Start the app:
+     ```bash
+     FLASK_APP=main.py FLASK_ENV=development python main.py
+     ```
+   - Visit `http://localhost:8080/`.
 
-docker build -t $IMAGE_URI .
-docker push $IMAGE_URI
-```
+3. Run locally with GCS access (recommended for actual upload testing)
+   - Provide credentials and set `UPLOAD_BUCKET`:
+     - Place a service account key locally and point `GOOGLE_APPLICATION_CREDENTIALS` to it, or rely on Application Default Credentials:
+     ```bash
+     export UPLOAD_BUCKET=my-bucket
+     export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+     python main.py
+     ```
+   - Upload via browser to test web upload.
+   - The server will upload the original bytes to `gs://my-bucket/<TIMESTAMP>/<filename>`.
+   
+Docker & containerization
+- The repository contains a Dockerfile (or you can create one similar to):
+  ```dockerfile
+  FROM python:3.13-slim
+  WORKDIR /app
+  COPY requirements.txt .
+  RUN pip install --no-cache-dir -r requirements.txt
+  COPY . /app
+  ENTRYPOINT ["python", "main.py"]
+  ```
+- Build and push image:
+  ```bash
+  docker build -t gcr.io/YOUR_PROJECT/my-image-app:latest .
+  docker push gcr.io/YOUR_PROJECT/my-image-app:latest
+  ```
 
-Create and run a Cloud Run Job
-Create the job (example):
-```bash
-gcloud run jobs create my-image-job \
-  --image $IMAGE_URI \
-  --region $REGION \
-  --command python --args process.py
-```
-If your image already sets ENTRYPOINT to `python process.py`, you can omit `--command`.
+Deploy to Cloud Run (service)
+- Use Cloud Run service to host the web + event receiver.
+- Recommended steps:
+  1. Ensure the service account used by Cloud Run has the following permissions on the bucket(s):
+     - `roles/storage.objectViewer` (download source object)
+     - `roles/storage.objectCreator` (upload thumbnail)
+     - `roles/eventarc.eventReceiver` (receive eventarc events)
+  2. Deploy:
+     ```bash
+     gcloud run deploy my-image-service \
+       --image gcr.io/YOUR_PROJECT/my-image-app:latest \
+       --platform managed \
+       --region us-central1 \
+       --set-env-vars UPLOAD_BUCKET=my-bucket,FLASK_SECRET='replace-with-secure' \
+       --allow-unauthenticated
+     ```
+     - `--allow-unauthenticated` may be removed if you want to restrict access and require authentication.
+- Configure Eventarc to send events to your service.
 
-Configure env vars (must set INPUT_FOLDER):
-```bash
-gcloud run jobs update my-image-job \
-  --set-env-vars INPUT_FOLDER=gs://my-bucket/path,CLOUD_RUN_TASK_COUNT=4 \
-  --region $REGION
-```
+Security and permissions
+- The service uses the Cloud Run service account for authentication when accessing GCS. Grant least privilege:
+  - `storage.objects.get` and `storage.objects.create` on relevant buckets.
+- If you expose the web endpoint publicly, consider authentication, rate limiting, and file-size limits.
 
-Run the job:
-```bash
-gcloud run jobs run my-image-job --region $REGION
-```
+Observability and troubleshooting
+- Logs: Cloud Run writes stdout/stderr to Cloud Logging. Add additional logging where helpful.
+- Common errors:
+  - Missing `UPLOAD_BUCKET`: homepage shows a clear error and form is not rendered.
+  - Permission denied from Cloud Run: ensure the service account has the required storage permissions.
+  - Duplicate thumbnail uploads: due to in-memory idempotency, duplicates may occur across instances — use a shared idempotency store for global dedupe.
 
-Notes on parallelism (chunking)
-- The script partitions discovered images across `TASK_COUNT`. Each worker should be invoked with a distinct `CLOUD_RUN_TASK_INDEX` in `[0..TASK_COUNT-1]`.
-- Cloud Run Jobs supports task-level parallelism; ensure your orchestrator or job configuration supplies the correct indices to workers.
-
-Output layout and naming collisions
-- Thumbnails are uploaded to the bucket root under a timestamp folder:
-  `gs://<bucket>/<TIMESTAMP>/<original_filename>`
-- Timestamp uses minute precision: `YYYYMMDDTHHZ` (UTC, no seconds, minutes).
-- If multiple source files share the same filename and are processed in the same minute, consider preserving source subpaths or adding unique suffixes to avoid overwrites.
-
-Troubleshooting tips
-- Container exits immediately with no logs:
-  - Inspect the image entrypoint/CMD with `docker inspect`.
-  - Force-run Python (`--entrypoint python IMAGE_URI process.py`) to confirm the script runs.
-  - Verify `process.py` exists in the image.
-- Missing `INPUT_FOLDER`: the script exits early and prints an error. Ensure env var is set.
-- Authentication errors: ensure the running service account has `storage.objects.get` and `storage.objects.create` permissions, or mount credentials during local testing.
-- Memory/IO pressure: the script downloads each blob into memory; increase container memory or stream to disk if needed.
-
-Extending the project
-- Preserve source subpaths in the output folder (recommended for collision avoidance).
-- Add an `OUTPUT_BUCKET` env var to write thumbnails to a separate bucket.
-- Make image detection more robust by validating file contents (tradeoff: extra downloads).
-- Add per-task concurrency or batching inside a worker, carefully balancing memory and network I/O.
-
-Files of interest
-- `process.py` — main logic (GCS listing, chunking, Pillow processing, upload).
-- `requirements.txt` — required Python packages.
-- `Dockerfile` — recommended to control image ENTRYPOINT.
-
-If you want, I can:
-- Export the Mermaid diagrams to PNG/SVG and add them to the repo for viewers that don't render Mermaid.
-- Add a Dockerfile to the repo and a small Makefile to build/push/run the Cloud Run Job.
-- Modify `process.py` to preserve sub-paths under the timestamp folder or add an `OUTPUT_BUCKET` option.
+Extending this project
+- Replace in-memory idempotency with a shared store (Firestore, Redis, Cloud Storage object with preconditions) to make idempotency reliable across instances.
+- Add thumbnail metadata (source path, original generation) to thumbnails (object metadata).
+- Introduce streaming processing for very large images to reduce memory pressure.
+- Add unit and integration tests for the web and event handlers.

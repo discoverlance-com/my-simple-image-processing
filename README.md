@@ -44,8 +44,9 @@ flowchart TB
   SJ_TIME --> COST
   PT_TIME --> COST
   style COST fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
-  note[Note: If total compute-seconds are equal, aggregate cost will be similar]:::noteStyle
+  note[Note: If total compute-seconds are equal, aggregate cost will be similar]
   classDef noteStyle fill:#fff8f1,stroke:#f59e0b
+  class note noteStyle
   COST --- note
 ```
 

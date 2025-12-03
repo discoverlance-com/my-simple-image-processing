@@ -36,15 +36,15 @@ Below are three diagrams and accompanying explanations in the requested order:
 ```mermaid
 flowchart TB
   SJ[Single Job] -->|single container| SJ_PROC[Processes all items sequentially]
-  PT[Parallel Tasks] -->|N containers| PT_PROC[Each task processes a chunk concurrently]
-  SJ_PROC --> SJ_TIME[Wall-clock = sum(per-item times)]
-  PT_PROC --> PT_TIME[Wall-clock ≈ max(per-task times)]
-  SJ_COST[Aggregate cost = total vCPU-seconds] --> COST
-  PT_COST[Aggregate cost = total vCPU-seconds] --> COST
+  PT[Parallel Tasks] -->|N containers| PT_PROC[Each task processes a chunk]
+  SJ_PROC --> SJ_TIME[Wall-clock = sum of per-item times]
+  PT_PROC --> PT_TIME[Wall-clock ~ max per-task time]
+  SJ_COST[Aggregate cost = total vCPU seconds] --> COST
+  PT_COST[Aggregate cost = total vCPU seconds] --> COST
   SJ_TIME --> COST
   PT_TIME --> COST
   style COST fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
-  note[Note: If total compute-seconds are equal, aggregate cost will be similar]:::noteStyle
+  note[Note: If total compute seconds are equal the aggregate cost will be similar]:::noteStyle
   classDef noteStyle fill:#fff8f1,stroke:#f59e0b
   COST --- note
 ```
@@ -64,12 +64,12 @@ graph LR
   A --> C[Fault isolation & easier retries]
   A --> D[Scalable concurrency]
   A --> E[Flexible cost/time tradeoff]
-  A --> F[Higher peak I/O / API rate]
+  A --> F[Higher peak I/O and API rate]
   B --> b1[Results available sooner]
-  C --> c1[Retry only failing chunk]
+  C --> c1[Retry only the failing chunk]
   D --> d1[Tune TASK_COUNT to match quotas]
-  E --> e1[Trade money for time (or vice-versa)]
-  F --> f1[Monitor quotas & throttling]
+  E --> e1[Trade money for time or vice-versa]
+  F --> f1[Monitor quotas and throttling]
 ```
 
 Key benefits:
@@ -88,19 +88,19 @@ flowchart LR
   subgraph single [Single Job]
     S0[Start] --> S1[Process 1000 images sequentially]
     S1 --> S2[Time = 1000 * t_item]
-    S2 --> SC[Aggregate cost ≈ 1000 * t_item * vCPU]
+    S2 --> SC[Aggregate cost ~ 1000 * t_item * vCPU]
   end
 
-  subgraph parallel [Parallel Tasks (N=10)]
+  subgraph parallel [Parallel Tasks N=10]
     P0[Start] --> P1[Split into 10 chunks of 100]
     P1 --> P2[10 workers run concurrently]
-    P2 --> P3[Time ≈ 100 * t_item + overhead]
-    P3 --> PC[Aggregate cost ≈ 1000 * t_item * vCPU]
+    P2 --> P3[Time ~ 100 * t_item + overhead]
+    P3 --> PC[Aggregate cost ~ 1000 * t_item * vCPU]
   end
 
   SC --> compare[Compare]
   PC --> compare
-  compare --> note1[Wall-clock: parallel ≈ 10x faster (ideal)]
+  compare --> note1[Wall-clock: parallel ~ 10x faster (ideal)]
   compare --> note2[Cost: roughly similar assuming same total compute]
 ```
 

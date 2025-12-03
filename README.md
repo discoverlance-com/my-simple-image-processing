@@ -113,7 +113,7 @@ Notes on parallelism (chunking)
 Output layout and naming collisions
 - Thumbnails are uploaded to the bucket root under a timestamp folder:
   `gs://<bucket>/<TIMESTAMP>/<original_filename>`
-- Timestamp uses minute precision: `YYYYMMDDTHHMMZ` (UTC, no seconds).
+- Timestamp uses minute precision: `YYYYMMDDTHHZ` (UTC, no seconds, minutes).
 - If multiple source files share the same filename and are processed in the same minute, consider preserving source subpaths or adding unique suffixes to avoid overwrites.
 
 Troubleshooting tips

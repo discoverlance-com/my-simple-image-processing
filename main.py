@@ -303,7 +303,7 @@ def handle_event():
 
     timestamp = _utc_timestamp_folder()
     dest_basename = object_name.split("/")[-1]
-    dest_blob_name = f"{timestamp}/{dest_basename}"
+    dest_blob_name = f"{timestamp}/resized/{dest_basename}"
 
     content_type = (
         mimetypes.guess_type(dest_basename)[0] or f"image/{out_format.lower()}"
